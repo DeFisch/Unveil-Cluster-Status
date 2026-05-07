@@ -36,7 +36,8 @@ systemd-user or a cron `@reboot` entry — let me know if you want that.)
 
 ## Tunables (env vars)
 
-- `GPU_MON_INTERVAL` — seconds between samples (default 600)
+- `GPU_MON_INTERVAL` — seconds between samples (default 600 = 10 min)
+- `GPU_MON_PUSH_INTERVAL` — seconds between `git push` of the dashboard (default 3600 = 1h, 0 disables)
 - `GPU_MON_RETENTION_DAYS` — prune `samples.jsonl` older than this (default 60)
 
 ## Dashboard
@@ -51,15 +52,11 @@ It's a static HTML file. Two ways to view:
    ```
    then open http://localhost:8000
 
-2. **Push to GitHub Pages.** Once you have a repo:
-   ```sh
-   cd ~/gpu-monitor
-   git init && git add . && git commit -m "init"
-   git remote add origin git@github.com:YOU/gpu-monitor.git
-   git push -u origin main
-   # enable Pages in repo settings, source = main branch /dashboard folder
-   ```
-   Add a cron entry (or extend the daemon) to commit + push every cycle.
+2. **GitHub Pages (set up).** Live at
+   https://defisch.github.io/Unveil-Cluster-Status/
+
+   The daemon auto-pushes `docs/data.json` every `GPU_MON_PUSH_INTERVAL`
+   seconds (default 1h). Auth is via the PAT in `~/.netrc` (mode 0600).
 
 ## Notes on what gets tracked
 

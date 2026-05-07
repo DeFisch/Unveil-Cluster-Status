@@ -32,6 +32,8 @@ HOSTS = [
 SAMPLE_INTERVAL = int(os.environ.get("GPU_MON_INTERVAL", "600"))  # seconds (10 min)
 RETENTION_DAYS = int(os.environ.get("GPU_MON_RETENTION_DAYS", "60"))
 DASHBOARD_WINDOW_DAYS = 31
+# auto-push to GitHub Pages every N seconds (0 = disabled)
+PUSH_INTERVAL = int(os.environ.get("GPU_MON_PUSH_INTERVAL", "3600"))
 
 # columns we ask nvidia-smi for
 GPU_QUERY = "index,name,utilization.gpu,memory.used,memory.total"
@@ -275,6 +277,49 @@ def prune_jsonl():
         tmp.unlink(missing_ok=True)
 
 
+def git_push_dashboard():
+    """Commit the refreshed docs/data.json and push to origin.
+
+    Quiet on success, logs to stderr on failure. Skipped if no .git or no remote.
+    """
+    if not (ROOT / ".git").exists():
+        return
+    try:
+        # Stage only the published artifact; leave samples.jsonl out unless tracked.
+        subprocess.run(
+            ["git", "-C", str(ROOT), "add", "docs/data.json"],
+            check=True, capture_output=True, timeout=15,
+        )
+        # Anything to commit?
+        diff = subprocess.run(
+            ["git", "-C", str(ROOT), "diff", "--cached", "--quiet"],
+            capture_output=True, timeout=15,
+        )
+        if diff.returncode == 0:
+            return  # no changes
+        ts = datetime.now(timezone.utc).isoformat(timespec="minutes")
+        subprocess.run(
+            ["git", "-C", str(ROOT), "commit", "-m", f"data: refresh {ts}"],
+            check=True, capture_output=True, timeout=30,
+        )
+        push = subprocess.run(
+            ["git", "-C", str(ROOT), "push", "--quiet"],
+            capture_output=True, timeout=60,
+        )
+        if push.returncode != 0:
+            sys.stderr.write(
+                f"[warn] git push failed: {push.stderr.decode(errors='replace')[:300]}\n"
+            )
+        else:
+            print(f"[{ts}] pushed dashboard update", flush=True)
+    except subprocess.CalledProcessError as e:
+        sys.stderr.write(
+            f"[warn] git op failed: {e.stderr.decode(errors='replace')[:300] if e.stderr else e}\n"
+        )
+    except Exception as e:  # noqa: BLE001
+        sys.stderr.write(f"[warn] git push error: {e}\n")
+
+
 def write_dashboard():
     samples = load_recent_samples(DASHBOARD_WINDOW_DAYS)
     payload = build_dashboard_payload(samples)
@@ -304,6 +349,7 @@ def main():
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     last_prune = 0.0
+    last_push = 0.0
 
     while True:
         t0 = time.time()
@@ -329,6 +375,10 @@ def main():
             except Exception as e:  # noqa: BLE001
                 sys.stderr.write(f"[error] prune failed: {e}\n")
             last_prune = time.time()
+
+        if PUSH_INTERVAL > 0 and time.time() - last_push >= PUSH_INTERVAL:
+            git_push_dashboard()
+            last_push = time.time()
 
         if once:
             break
