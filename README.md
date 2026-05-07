@@ -14,9 +14,9 @@ gpu-monitor/
   data/
     samples.jsonl   # append-only log of every sample
     latest.json     # rolling 30-day window for the dashboard
-  dashboard/
+  docs/             # GitHub Pages serves this directory
     index.html      # static dashboard (Chart.js)
-    data.json       # symlink-equivalent of latest.json (copied each cycle)
+    data.json       # copy of latest.json (refreshed each cycle)
   run/
     monitor.pid
     monitor.log
@@ -47,7 +47,7 @@ It's a static HTML file. Two ways to view:
    ```sh
    ssh -L 8000:localhost:8000 denali-14
    # on denali-14:
-   cd ~/gpu-monitor/dashboard && python3 -m http.server 8000
+   cd ~/gpu-monitor/docs && python3 -m http.server 8000
    ```
    then open http://localhost:8000
 

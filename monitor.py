@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"
 JSONL_PATH = DATA_DIR / "samples.jsonl"
 LATEST_PATH = DATA_DIR / "latest.json"
-DASHBOARD_DATA = ROOT / "dashboard" / "data.json"
+DASHBOARD_DATA = ROOT / "docs" / "data.json"
 
 HOSTS = [
     {"name": "denali-14", "ssh": None},   # local
