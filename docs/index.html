@@ -165,9 +165,10 @@
   <h1>Denali GPU Monitor</h1>
   <span class="meta" id="generatedAt">loading...</span>
   <div class="toolbar" id="rangeBtns">
-    <button class="btn" data-range="1">24 hours</button>
-    <button class="btn active" data-range="7">Week</button>
-    <button class="btn" data-range="30">Month</button>
+    <button class="btn" data-hours="1">Last hour</button>
+    <button class="btn" data-hours="24">24 hours</button>
+    <button class="btn active" data-hours="168">Week</button>
+    <button class="btn" data-hours="720">Month</button>
   </div>
 </header>
 
@@ -216,14 +217,20 @@ function fmtTs(iso) {
   });
 }
 
-function filterRange(data, days) {
+function filterRange(data, hours) {
   const now = Date.now();
-  const cutoff = now - days * 86400000;
+  const cutoff = now - hours * 3600000;
   const idxs = [];
   data.timestamps.forEach((t, i) => {
     if (new Date(t).getTime() >= cutoff) idxs.push(i);
   });
   return idxs;
+}
+
+function rangeLabel(hours) {
+  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"}`;
+  const days = hours / 24;
+  return `${days} day${days === 1 ? "" : "s"}`;
 }
 
 function avg(arr) {
@@ -427,17 +434,17 @@ function renderHost(host, idxs) {
 }
 
 // ---------- main render ----------
-function render(days) {
+function render(hours) {
   destroyCharts();
   document.querySelectorAll("#rangeBtns .btn").forEach(b => {
-    b.classList.toggle("active", parseInt(b.dataset.range) === days);
+    b.classList.toggle("active", parseInt(b.dataset.hours) === hours);
   });
   const main = document.getElementById("main");
   main.innerHTML = "";
 
-  const idxs = filterRange(window._data, days);
+  const idxs = filterRange(window._data, hours);
   if (idxs.length === 0) {
-    main.innerHTML = `<div class="empty">No samples in the last ${days} day(s).</div>`;
+    main.innerHTML = `<div class="empty">No samples in the last ${rangeLabel(hours)}.</div>`;
     return;
   }
   window._data.hosts.forEach(host => renderHost(host, idxs));
@@ -453,7 +460,7 @@ async function main() {
       "updated " + fmtTs(data.generated_at);
     document.getElementById("intervalLabel").textContent =
       Math.round(data.interval_sec / 60);
-    render(7);
+    render(168);
   } catch (e) {
     document.getElementById("main").innerHTML =
       `<div class="empty">Failed to load data.json: ${e.message}</div>`;
@@ -461,7 +468,7 @@ async function main() {
 }
 
 document.querySelectorAll("#rangeBtns .btn").forEach(b => {
-  b.addEventListener("click", () => render(parseInt(b.dataset.range)));
+  b.addEventListener("click", () => render(parseInt(b.dataset.hours)));
 });
 main();
 </script>
