@@ -32,8 +32,15 @@ HOSTS = [
 SAMPLE_INTERVAL = int(os.environ.get("GPU_MON_INTERVAL", "600"))  # seconds (10 min)
 RETENTION_DAYS = int(os.environ.get("GPU_MON_RETENTION_DAYS", "60"))
 DASHBOARD_WINDOW_DAYS = 31
-# auto-push to GitHub Pages every N seconds (0 = disabled)
-PUSH_INTERVAL = int(os.environ.get("GPU_MON_PUSH_INTERVAL", "3600"))
+# auto-publish to gh-pages every N seconds (0 = disabled). Default = every sample.
+PUBLISH_INTERVAL = int(os.environ.get("GPU_MON_PUBLISH_INTERVAL", str(SAMPLE_INTERVAL)))
+PUBLISH_REMOTE = os.environ.get(
+    "GPU_MON_PUBLISH_REMOTE",
+    "https://github.com/DeFisch/Unveil-Cluster-Status.git",
+)
+PUBLISH_BRANCH = os.environ.get("GPU_MON_PUBLISH_BRANCH", "gh-pages")
+GIT_USER_NAME = os.environ.get("GPU_MON_GIT_USER", "DeFisch")
+GIT_USER_EMAIL = os.environ.get("GPU_MON_GIT_EMAIL", "fengzhenyang47@gmail.com")
 
 # columns we ask nvidia-smi for
 GPU_QUERY = "index,name,utilization.gpu,memory.used,memory.total"
@@ -277,47 +284,50 @@ def prune_jsonl():
         tmp.unlink(missing_ok=True)
 
 
-def git_push_dashboard():
-    """Commit the refreshed docs/data.json and push to origin.
+def publish_gh_pages():
+    """Force-push current docs/ to the configured publish branch as a fresh single commit.
 
-    Quiet on success, logs to stderr on failure. Skipped if no .git or no remote.
+    Uses a throwaway temp repo so main's working tree and history are untouched.
+    Authentication is taken from ~/.netrc (HOME is inherited).
     """
-    if not (ROOT / ".git").exists():
+    import tempfile
+    src = ROOT / "docs"
+    if not src.exists() or not any(src.iterdir()):
         return
-    try:
-        # Stage only the published artifact; leave samples.jsonl out unless tracked.
-        subprocess.run(
-            ["git", "-C", str(ROOT), "add", "docs/data.json"],
-            check=True, capture_output=True, timeout=15,
-        )
-        # Anything to commit?
-        diff = subprocess.run(
-            ["git", "-C", str(ROOT), "diff", "--cached", "--quiet"],
-            capture_output=True, timeout=15,
-        )
-        if diff.returncode == 0:
-            return  # no changes
-        ts = datetime.now(timezone.utc).isoformat(timespec="minutes")
-        subprocess.run(
-            ["git", "-C", str(ROOT), "commit", "-m", f"data: refresh {ts}"],
-            check=True, capture_output=True, timeout=30,
-        )
-        push = subprocess.run(
-            ["git", "-C", str(ROOT), "push", "--quiet"],
-            capture_output=True, timeout=60,
-        )
-        if push.returncode != 0:
-            sys.stderr.write(
-                f"[warn] git push failed: {push.stderr.decode(errors='replace')[:300]}\n"
+
+    ts = datetime.now(timezone.utc).isoformat(timespec="minutes")
+    env = os.environ.copy()
+    env["GIT_TERMINAL_PROMPT"] = "0"  # never block on a credential prompt
+
+    with tempfile.TemporaryDirectory(prefix="gpumon-pub-") as tmp:
+        td = Path(tmp)
+        for child in src.iterdir():
+            dst = td / child.name
+            if child.is_dir():
+                shutil.copytree(child, dst)
+            else:
+                shutil.copy2(child, dst)
+
+        steps = [
+            ["git", "init", "-q", "-b", PUBLISH_BRANCH],
+            ["git", "config", "user.name", GIT_USER_NAME],
+            ["git", "config", "user.email", GIT_USER_EMAIL],
+            ["git", "add", "-A"],
+            ["git", "commit", "-q", "-m", f"publish {ts}"],
+            ["git", "push", "-q", "--force",
+                PUBLISH_REMOTE, f"HEAD:{PUBLISH_BRANCH}"],
+        ]
+        for cmd in steps:
+            r = subprocess.run(
+                cmd, cwd=td, env=env, capture_output=True, timeout=60,
             )
-        else:
-            print(f"[{ts}] pushed dashboard update", flush=True)
-    except subprocess.CalledProcessError as e:
-        sys.stderr.write(
-            f"[warn] git op failed: {e.stderr.decode(errors='replace')[:300] if e.stderr else e}\n"
-        )
-    except Exception as e:  # noqa: BLE001
-        sys.stderr.write(f"[warn] git push error: {e}\n")
+            if r.returncode != 0:
+                err = r.stderr.decode(errors="replace").strip()[:300]
+                sys.stderr.write(
+                    f"[warn] publish step failed ({' '.join(cmd[:2])}): {err}\n"
+                )
+                return
+    print(f"[{ts}] published to {PUBLISH_BRANCH}", flush=True)
 
 
 def write_dashboard():
@@ -349,7 +359,7 @@ def main():
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     last_prune = 0.0
-    last_push = 0.0
+    last_publish = 0.0
 
     while True:
         t0 = time.time()
@@ -376,9 +386,12 @@ def main():
                 sys.stderr.write(f"[error] prune failed: {e}\n")
             last_prune = time.time()
 
-        if PUSH_INTERVAL > 0 and time.time() - last_push >= PUSH_INTERVAL:
-            git_push_dashboard()
-            last_push = time.time()
+        if PUBLISH_INTERVAL > 0 and time.time() - last_publish >= PUBLISH_INTERVAL:
+            try:
+                publish_gh_pages()
+            except Exception as e:  # noqa: BLE001
+                sys.stderr.write(f"[error] publish failed: {e}\n")
+            last_publish = time.time()
 
         if once:
             break

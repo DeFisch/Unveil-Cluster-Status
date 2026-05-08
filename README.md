@@ -37,7 +37,9 @@ systemd-user or a cron `@reboot` entry — let me know if you want that.)
 ## Tunables (env vars)
 
 - `GPU_MON_INTERVAL` — seconds between samples (default 600 = 10 min)
-- `GPU_MON_PUSH_INTERVAL` — seconds between `git push` of the dashboard (default 3600 = 1h, 0 disables)
+- `GPU_MON_PUBLISH_INTERVAL` — seconds between gh-pages publishes (default = sample interval; 0 disables)
+- `GPU_MON_PUBLISH_BRANCH` — branch the dashboard is force-pushed to (default `gh-pages`)
+- `GPU_MON_PUBLISH_REMOTE` — git URL to push to (default the GitHub repo)
 - `GPU_MON_RETENTION_DAYS` — prune `samples.jsonl` older than this (default 60)
 
 ## Dashboard
@@ -55,8 +57,9 @@ It's a static HTML file. Two ways to view:
 2. **GitHub Pages (set up).** Live at
    https://defisch.github.io/Unveil-Cluster-Status/
 
-   The daemon auto-pushes `docs/data.json` every `GPU_MON_PUSH_INTERVAL`
-   seconds (default 1h). Auth is via the PAT in `~/.netrc` (mode 0600).
+   Each cycle the daemon force-pushes `docs/` as a single fresh commit to a
+   `gh-pages` orphan branch. `main` stays clean — it never accumulates
+   "data: refresh" commits. Auth is via the PAT in `~/.netrc` (mode 0600).
 
 ## Notes on what gets tracked
 

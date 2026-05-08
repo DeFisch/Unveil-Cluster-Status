@@ -3,6 +3,8 @@ __pycache__/
 *.pyc
 .DS_Store
 
-# Local-only data files; only the rendered docs/data.json is published.
+# Local-only data files; only docs/data.json gets published, and that goes to
+# the gh-pages branch — not main.
 data/samples.jsonl
 data/latest.json
+docs/data.json
