@@ -386,7 +386,11 @@ def main():
                 sys.stderr.write(f"[error] prune failed: {e}\n")
             last_prune = time.time()
 
-        if PUBLISH_INTERVAL > 0 and time.time() - last_publish >= PUBLISH_INTERVAL:
+        # Half-sample-period tolerance so PUBLISH_INTERVAL == SAMPLE_INTERVAL
+        # always fires every cycle (otherwise scheduling drift makes the
+        # elapsed time come in microseconds short of the threshold).
+        publish_threshold = PUBLISH_INTERVAL - SAMPLE_INTERVAL / 2
+        if PUBLISH_INTERVAL > 0 and time.time() - last_publish >= publish_threshold:
             try:
                 publish_gh_pages()
             except Exception as e:  # noqa: BLE001
