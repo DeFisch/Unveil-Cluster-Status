@@ -166,8 +166,8 @@
   <span class="meta" id="generatedAt">loading...</span>
   <div class="toolbar" id="rangeBtns">
     <button class="btn" data-hours="1">Last hour</button>
-    <button class="btn" data-hours="24">24 hours</button>
-    <button class="btn active" data-hours="168">Week</button>
+    <button class="btn active" data-hours="24">24 hours</button>
+    <button class="btn" data-hours="168">Week</button>
     <button class="btn" data-hours="720">Month</button>
   </div>
 </header>
@@ -251,14 +251,21 @@ function destroyCharts() {
   charts = [];
 }
 
-function buildUtilChart(canvas, host, idxs) {
+function windowBounds(hours) {
+  const now = Date.now();
+  return { xMin: now - hours * 3600000, xMax: now };
+}
+
+function buildUtilChart(canvas, host, idxs, hours) {
   const tsAll = window._data.timestamps;
-  const ts = idxs.map(i => tsAll[i]);
+  const { xMin, xMax } = windowBounds(hours);
+  // Use {x, y} points so the time scale honors min/max even when there's no
+  // data near either edge of the window.
   const datasets = [];
   for (let g = 0; g < host.num_gpus; g++) {
     datasets.push({
       label: `GPU ${g}`,
-      data: idxs.map(i => host.util[i]?.[g] ?? null),
+      data: idxs.map(i => ({ x: new Date(tsAll[i]).getTime(), y: host.util[i]?.[g] ?? null })),
       borderColor: `hsl(${(g * 47) % 360}, 70%, 65%)`,
       backgroundColor: `hsl(${(g * 47) % 360}, 70%, 65%, 0.1)`,
       borderWidth: 1.5,
@@ -269,7 +276,7 @@ function buildUtilChart(canvas, host, idxs) {
   }
   const c = new Chart(canvas, {
     type: "line",
-    data: { labels: ts, datasets },
+    data: { datasets },
     options: {
       responsive: true, maintainAspectRatio: false,
       animation: false,
@@ -277,6 +284,7 @@ function buildUtilChart(canvas, host, idxs) {
       scales: {
         x: {
           type: "time",
+          min: xMin, max: xMax,
           time: { tooltipFormat: "MMM d, HH:mm" },
           ticks: { color: "#8b949e", maxRotation: 0, autoSkipPadding: 20 },
           grid: { color: "#232a35" },
@@ -297,9 +305,9 @@ function buildUtilChart(canvas, host, idxs) {
   charts.push(c);
 }
 
-function buildUserMemChart(canvas, host, idxs) {
+function buildUserMemChart(canvas, host, idxs, hours) {
   const tsAll = window._data.timestamps;
-  const ts = idxs.map(i => tsAll[i]);
+  const { xMin, xMax } = windowBounds(hours);
   const totalMB = (host.mem_total || []).reduce((a, b) => a + b, 0);
 
   // Sort users by total memory across the window (descending) so the biggest
@@ -318,10 +326,11 @@ function buildUserMemChart(canvas, host, idxs) {
     if (!totalMB) return 0;
     return ((host.user_mem[i] || {})[u] || 0) / totalMB * 100;
   };
+  const tsMs = (i) => new Date(tsAll[i]).getTime();
 
   const datasets = users.map(u => ({
     label: u,
-    data: idxs.map(i => userPct(u, i)),
+    data: idxs.map(i => ({ x: tsMs(i), y: userPct(u, i) })),
     backgroundColor: userColor(u, 0.55),
     borderColor: userColor(u, 0.95),
     borderWidth: 1,
@@ -336,7 +345,8 @@ function buildUserMemChart(canvas, host, idxs) {
     data: idxs.map(i => {
       const um = host.user_mem[i] || {};
       const used = Object.values(um).reduce((a, b) => a + b, 0);
-      return totalMB ? Math.max(0, 100 - used / totalMB * 100) : 100;
+      const free = totalMB ? Math.max(0, 100 - used / totalMB * 100) : 100;
+      return { x: tsMs(i), y: free };
     }),
     backgroundColor: `rgba(${UNUSED_COLOR_RGB}, 0.30)`,
     borderColor: `rgba(${UNUSED_COLOR_RGB}, 0.6)`,
@@ -349,7 +359,7 @@ function buildUserMemChart(canvas, host, idxs) {
 
   const c = new Chart(canvas, {
     type: "line",
-    data: { labels: ts, datasets },
+    data: { datasets },
     options: {
       responsive: true, maintainAspectRatio: false,
       animation: false,
@@ -357,6 +367,7 @@ function buildUserMemChart(canvas, host, idxs) {
       scales: {
         x: {
           type: "time",
+          min: xMin, max: xMax,
           time: { tooltipFormat: "MMM d, HH:mm" },
           ticks: { color: "#8b949e", maxRotation: 0, autoSkipPadding: 20 },
           grid: { color: "#232a35" },
@@ -390,7 +401,7 @@ function buildUserMemChart(canvas, host, idxs) {
   charts.push(c);
 }
 
-function renderHost(host, idxs) {
+function renderHost(host, idxs, hours) {
   const last = idxs[idxs.length - 1];
   const lastUtil = host.util[last] || [];
   const lastMem = host.mem_used[last] || [];
@@ -438,8 +449,8 @@ function renderHost(host, idxs) {
   document.getElementById("main").appendChild(section);
 
   const [utilCanvas, memCanvas] = section.querySelectorAll("canvas");
-  buildUtilChart(utilCanvas, host, idxs);
-  buildUserMemChart(memCanvas, host, idxs);
+  buildUtilChart(utilCanvas, host, idxs, hours);
+  buildUserMemChart(memCanvas, host, idxs, hours);
 
   const grid = section.querySelector(".gpu-grid");
   for (let g = 0; g < host.num_gpus; g++) {
@@ -486,7 +497,7 @@ function render(hours) {
     main.innerHTML = `<div class="empty">No samples in the last ${rangeLabel(hours)}.</div>`;
     return;
   }
-  window._data.hosts.forEach(host => renderHost(host, idxs));
+  window._data.hosts.forEach(host => renderHost(host, idxs, hours));
 }
 
 async function main() {
@@ -499,7 +510,7 @@ async function main() {
       "updated " + fmtTs(data.generated_at);
     document.getElementById("intervalLabel").textContent =
       Math.round(data.interval_sec / 60);
-    render(168);
+    render(24);
   } catch (e) {
     document.getElementById("main").innerHTML =
       `<div class="empty">Failed to load data.json: ${e.message}</div>`;
