@@ -256,16 +256,38 @@ function windowBounds(hours) {
   return { xMin: now - hours * 3600000, xMax: now };
 }
 
-function buildUtilChart(canvas, host, idxs, hours) {
-  const tsAll = window._data.timestamps;
-  const { xMin, xMax } = windowBounds(hours);
-  // Use {x, y} points so the time scale honors min/max even when there's no
-  // data near either edge of the window.
+// Bucket raw sample indices into ≤ maxBuckets bins covering [xMin, xMax].
+// Each bin has its midpoint timestamp and the list of sample indices that fell
+// inside it. Empty bins are dropped, so the line renders as a continuous curve
+// across whatever data exists.
+function binIdxs(idxs, tsAll, xMin, xMax, maxBuckets = 100) {
+  if (idxs.length <= maxBuckets) {
+    return idxs.map(i => ({ midX: new Date(tsAll[i]).getTime(), idxs: [i] }));
+  }
+  const bucketMs = (xMax - xMin) / maxBuckets;
+  const buckets = Array.from({ length: maxBuckets }, (_, b) => ({
+    midX: xMin + (b + 0.5) * bucketMs,
+    idxs: [],
+  }));
+  for (const i of idxs) {
+    const t = new Date(tsAll[i]).getTime();
+    let b = Math.floor((t - xMin) / bucketMs);
+    if (b < 0) b = 0;
+    if (b >= maxBuckets) b = maxBuckets - 1;
+    buckets[b].idxs.push(i);
+  }
+  return buckets.filter(b => b.idxs.length > 0);
+}
+
+function buildUtilChart(canvas, host, bins, xMin, xMax) {
   const datasets = [];
   for (let g = 0; g < host.num_gpus; g++) {
     datasets.push({
       label: `GPU ${g}`,
-      data: idxs.map(i => ({ x: new Date(tsAll[i]).getTime(), y: host.util[i]?.[g] ?? null })),
+      data: bins.map(b => {
+        const vs = b.idxs.map(i => host.util[i]?.[g]).filter(v => v != null);
+        return { x: b.midX, y: vs.length ? vs.reduce((a, c) => a + c, 0) / vs.length : null };
+      }),
       borderColor: `hsl(${(g * 47) % 360}, 70%, 65%)`,
       backgroundColor: `hsl(${(g * 47) % 360}, 70%, 65%, 0.1)`,
       borderWidth: 1.5,
@@ -305,16 +327,29 @@ function buildUtilChart(canvas, host, idxs, hours) {
   charts.push(c);
 }
 
-function buildUserMemChart(canvas, host, idxs, hours) {
-  const tsAll = window._data.timestamps;
-  const { xMin, xMax } = windowBounds(hours);
+function buildUserMemChart(canvas, host, bins, xMin, xMax) {
   const totalMB = (host.mem_total || []).reduce((a, b) => a + b, 0);
+
+  // Average user_mem within each bin: sum each user's MB then divide by the
+  // number of samples that contributed to the bin.
+  const binUserMem = bins.map(b => {
+    const sum = {};
+    for (const i of b.idxs) {
+      const um = host.user_mem[i] || {};
+      for (const [u, v] of Object.entries(um)) {
+        sum[u] = (sum[u] || 0) + v;
+      }
+    }
+    const n = b.idxs.length;
+    const out = {};
+    for (const [u, v] of Object.entries(sum)) out[u] = v / n;
+    return out;
+  });
 
   // Sort users by total memory across the window (descending) so the biggest
   // user lives at the bottom of the stack and "unused" sits on top.
   const totalsByUser = {};
-  idxs.forEach(i => {
-    const um = host.user_mem[i] || {};
+  binUserMem.forEach(um => {
     for (const [u, v] of Object.entries(um)) {
       totalsByUser[u] = (totalsByUser[u] || 0) + v;
     }
@@ -322,15 +357,12 @@ function buildUserMemChart(canvas, host, idxs, hours) {
   const users = Object.keys(totalsByUser)
     .sort((a, b) => totalsByUser[b] - totalsByUser[a]);
 
-  const userPct = (u, i) => {
-    if (!totalMB) return 0;
-    return ((host.user_mem[i] || {})[u] || 0) / totalMB * 100;
-  };
-  const tsMs = (i) => new Date(tsAll[i]).getTime();
-
   const datasets = users.map(u => ({
     label: u,
-    data: idxs.map(i => ({ x: tsMs(i), y: userPct(u, i) })),
+    data: bins.map((b, k) => ({
+      x: b.midX,
+      y: totalMB ? (binUserMem[k][u] || 0) / totalMB * 100 : 0,
+    })),
     backgroundColor: userColor(u, 0.55),
     borderColor: userColor(u, 0.95),
     borderWidth: 1,
@@ -342,11 +374,10 @@ function buildUserMemChart(canvas, host, idxs, hours) {
   // unused = remaining headroom up to 100%
   datasets.push({
     label: "unused",
-    data: idxs.map(i => {
-      const um = host.user_mem[i] || {};
-      const used = Object.values(um).reduce((a, b) => a + b, 0);
+    data: bins.map((b, k) => {
+      const used = Object.values(binUserMem[k]).reduce((a, c) => a + c, 0);
       const free = totalMB ? Math.max(0, 100 - used / totalMB * 100) : 100;
-      return { x: tsMs(i), y: free };
+      return { x: b.midX, y: free };
     }),
     backgroundColor: `rgba(${UNUSED_COLOR_RGB}, 0.30)`,
     borderColor: `rgba(${UNUSED_COLOR_RGB}, 0.6)`,
@@ -402,6 +433,9 @@ function buildUserMemChart(canvas, host, idxs, hours) {
 }
 
 function renderHost(host, idxs, hours) {
+  const tsAll = window._data.timestamps;
+  const { xMin, xMax } = windowBounds(hours);
+  const bins = binIdxs(idxs, tsAll, xMin, xMax, 100);
   const last = idxs[idxs.length - 1];
   const lastUtil = host.util[last] || [];
   const lastMem = host.mem_used[last] || [];
@@ -449,8 +483,8 @@ function renderHost(host, idxs, hours) {
   document.getElementById("main").appendChild(section);
 
   const [utilCanvas, memCanvas] = section.querySelectorAll("canvas");
-  buildUtilChart(utilCanvas, host, idxs, hours);
-  buildUserMemChart(memCanvas, host, idxs, hours);
+  buildUtilChart(utilCanvas, host, bins, xMin, xMax);
+  buildUserMemChart(memCanvas, host, bins, xMin, xMax);
 
   const grid = section.querySelector(".gpu-grid");
   for (let g = 0; g < host.num_gpus; g++) {
